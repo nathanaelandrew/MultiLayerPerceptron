@@ -22,6 +22,33 @@ namespace Backprop
 
         public static int Main(string[] args)
         {
+            int exitCode;
+            try
+            {
+                exitCode = Run(args);
+            }
+            catch (Exception ex)
+            {
+                // show the problem instead of letting the window vanish
+                Console.WriteLine();
+                Console.WriteLine("ERROR: " + ex.Message);
+                exitCode = 1;
+            }
+            WaitForKey();
+            return exitCode;
+        }
+
+        /// <summary>Keeps the console window open when launched by double-click / Visual Studio (Ctrl+F5).</summary>
+        private static void WaitForKey()
+        {
+            if (Console.IsInputRedirected) return; // piped/CI runs must not block
+            Console.WriteLine();
+            Console.WriteLine("Press any key to exit...");
+            Console.ReadKey(true);
+        }
+
+        private static int Run(string[] args)
+        {
             Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
             string path = args.Length > 0 ? args[0] : FindDataset();
 
