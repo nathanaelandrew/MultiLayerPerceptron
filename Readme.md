@@ -10,7 +10,7 @@ Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download).
 dotnet run                          # uses dataset.csv copied next to the executable
 dotnet run -- path/to/other.csv     # any CSV: numeric columns, LAST column = target
 ```
-Everything is printed to the console: engine self-test, data summary, tuning table, per-epoch
+The window stays open at the end ("Press any key to exit..."), including after errors. Everything is printed to the console: engine self-test, data summary, tuning table, per-epoch
 loss log, metrics. `sample_console_output.txt` is one captured run.
 
 ## Project layout
@@ -37,6 +37,14 @@ more rows (50+) is the biggest available improvement.
 * Features are min-max scaled to [0,1]; the target to [0.1,0.9] (the sigmoid output can only reach 0 or 1 asymptotically).
 * Scalers are fitted on **training rows only** (no leakage); predictions are converted back to original units.
 * 75/25 shuffled split (seed 42) -> 6 train / 2 test.
+
+## Part II compliance (only the provided engine classes)
+Track chosen: **Regression**. All learning goes through the provided `NeuralNet` and its neuron classes; no other ML code or package is used.
+The program makes this visible in the console:
+* **1a. Engine walkthrough** - builds `INeuron[]`, `HNeuron` and `ONeuron[]` directly, performs one back-propagation step
+  (forward pass, EC/DER, hidden error, weight and bias updates) with their own methods, then checks the result against `NeuralNet.learn()` from identical weights.
+* **Training** - `RegressionModel` builds `new NeuralNet(inputs, hidden, 1)` and trains with `setInputs`, `setDesiredOutput`, `learn`; predicts with `run` and `getOuputData`.
+* **6b. Persistence** - weights are written with `saveWeights`, loaded into a fresh `NeuralNet` with `loadWeights`, and predictions are verified identical.
 
 ## Engine verification
 The self-test checks the unmodified engine two ways: the forward pass against a hand formula (using the activity-sheet

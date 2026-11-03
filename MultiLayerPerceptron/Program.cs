@@ -4,16 +4,9 @@ using System.Globalization;
 using System.IO;
 using System.Threading;
 
-// Regression with the custom 3-layer MLP. The engine files (BackNeural.cs, InputN.cs, HiddenN.cs,
-// OuputN.cs) are used exactly as provided; everything else lives in this file.
+// Regression with the custom 3-layer MLP. 
 namespace Backprop
 {
-    /// <summary>
-    /// Regression with the custom 3-layer MLP (Backprop.NeuralNet).
-    /// Pipeline: self-test -> load CSV -> split -> grid search (LOOCV) -> train with
-    /// loss log -> evaluate -> leave-one-out check on all rows -> sample prediction.
-    /// Usage:  dotnet run [-- path/to/dataset.csv]
-    /// </summary>
     public class Program
     {
         private const double TrainRatio = 0.75;
@@ -38,7 +31,6 @@ namespace Backprop
             return exitCode;
         }
 
-        /// <summary>Keeps the console window open when launched by double-click / Visual Studio (Ctrl+F5).</summary>
         private static void WaitForKey()
         {
             if (Console.IsInputRedirected) return; // piped/CI runs must not block
@@ -52,15 +44,10 @@ namespace Backprop
             Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
             string path = args.Length > 0 ? args[0] : FindDataset();
 
-            Banner("Part II - chosen track: REGRESSION (custom Backprop engine only)");
-            Console.WriteLine("  Learning is done ONLY by the provided classes: NeuralNet, INeuron (input), HNeuron (hidden), ONeuron (output).");
-            Console.WriteLine("  Program.cs adds data loading, scaling, splitting, tuning and evaluation around them.");
-            Console.WriteLine();
-
-            Banner("1a. Engine walkthrough with INeuron / HNeuron / ONeuron (one backprop step, activity-sheet inputs)");
+            Banner("1a. Engine walkthrough with INeuron / HNeuron / ONeuron");
             if (!EngineWalkthrough.Run()) return 1;
 
-            Banner("1b. Engine verification (gradient check of the unmodified engine)");
+            Banner("1b. Engine verification");
             if (!EngineSelfTest.Run()) return 1;
 
             Banner("2. Data loading & description");
@@ -93,7 +80,7 @@ namespace Backprop
             RegressionModel model = new RegressionModel();
             model.Fit(data, train, best);
 
-            Banner("6. Evaluation");
+            Banner("6a. Evaluation");
             double[] trainActual = Select(data.Y, train), testActual = Select(data.Y, test);
             double[] trainPred = model.Predict(data, train), testPred = model.Predict(data, test);
             RegressionMetrics mTrain = RegressionMetrics.Compute(trainActual, trainPred);
@@ -111,7 +98,7 @@ namespace Backprop
             PrintPredictions("Test set predictions", data, test, testPred);
             PrintPredictions("Training set predictions", data, train, trainPred);
 
-            Banner("6b. Save and reload trained weights (NeuralNet.saveWeights / loadWeights)");
+            Banner("6b. Save and reload trained weights");
             string weightFile = Path.Combine(Path.GetTempPath(), "mlp_weights.txt");
             model.SaveWeights(weightFile);
             model.LoadWeights(weightFile);
@@ -123,7 +110,7 @@ namespace Backprop
                 maxDiff, maxDiff < 1e-9 ? "identical" : "MISMATCH");
             Console.WriteLine();
 
-            Banner("7. Leave-one-out cross-validation on ALL rows (more reliable for tiny data)");
+            Banner("7. Leave-one-out cross-validation on ALL rows");
             double[] looActual = new double[data.Count], looPred = new double[data.Count];
             for (int leave = 0; leave < data.Count; leave++)
             {
@@ -153,7 +140,7 @@ namespace Backprop
             return 0;
         }
 
-        // ------------------------------------------------------------------ helpers
+        // helpers
         private static string FindDataset()
         {
             string[] candidates = { "dataset.csv", Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dataset.csv") };
@@ -287,7 +274,7 @@ namespace Backprop
         }
     }
 
-    /// <summary>A numeric tabular dataset: feature rows plus one target value per row.</summary>
+    // dataset
     public class Dataset
     {
         public string[] FeatureNames;
@@ -335,7 +322,7 @@ namespace Backprop
                     // no header: fall through and parse this line as data
                 }
 
-                // malformed / missing values -> row is dropped and counted
+                // missing values -> row is dropped and counted
                 double[] values = new double[columns];
                 bool ok = cells.Length == columns;
                 for (int c = 0; ok && c < columns; c++)
@@ -355,10 +342,6 @@ namespace Backprop
         }
     }
 
-    /// <summary>
-    /// Min-max scaler: maps each column from [min,max] (learned on the TRAINING
-    /// data only, to avoid leakage) into [lo,hi].
-    /// </summary>
     public class MinMaxScaler
     {
         private double[] min, max;
@@ -407,7 +390,6 @@ namespace Backprop
 
     public static class DataSplitter
     {
-        /// <summary>Shuffles row indices (seeded Fisher-Yates).</summary>
         public static int[] ShuffledIndices(int n, int seed)
         {
             int[] idx = new int[n];
@@ -420,8 +402,6 @@ namespace Backprop
             }
             return idx;
         }
-
-        /// <summary>Random train/test split. At least one row always goes to each side.</summary>
         public static void Split(int n, double trainRatio, int seed, out int[] train, out int[] test)
         {
             int[] idx = ShuffledIndices(n, seed);
@@ -435,7 +415,6 @@ namespace Backprop
         }
     }
 
-    /// <summary>All hyperparameters of one training run.</summary>
     public class TrainingConfig
     {
         public int HiddenNodes = 4;
@@ -449,15 +428,8 @@ namespace Backprop
         }
     }
 
-    /// <summary>
-    /// Wraps the Backprop.NeuralNet engine for regression: scales features and
-    /// target with min-max scalers fitted on the training rows, trains with
-    /// shuffled online back-propagation and predicts in the ORIGINAL target units.
-    /// </summary>
     public class RegressionModel
     {
-        // Features -> [0,1]. Target -> [0.1,0.9]: the output neuron is a sigmoid, which can
-        // only reach 0 or 1 asymptotically, so targets at the very edge would saturate it.
         public const double FeatureLow = 0.0, FeatureHigh = 1.0;
         public const double TargetLow = 0.1, TargetHigh = 0.9;
 
@@ -484,8 +456,6 @@ namespace Backprop
             }
 
             // 2. build the network
-            // NOTE: the engine draws its initial weights from its own unseeded Random,
-            // so every new network starts from different random weights.
             featureCount = data.FeatureCount;
             hiddenNodes = cfg.HiddenNodes;
             net = new NeuralNet(featureCount, hiddenNodes, 1);
@@ -503,7 +473,7 @@ namespace Backprop
             }
             for (int epoch = 1; epoch <= cfg.Epochs; epoch++)
             {
-                // reshuffle sample order every epoch (Fisher-Yates)
+                // reshuffle sample order every epoch
                 for (int i = order.Length - 1; i > 0; i--)
                 {
                     int j = rng.Next(i + 1);
@@ -535,7 +505,6 @@ namespace Backprop
             return (mx - mn) == 0 ? 1 : (mx - mn);
         }
 
-        /// <summary>Mean squared error in scaled units - the quantity back-propagation minimises.</summary>
         private double ScaledMse(double[][] x, double[] y)
         {
             double sum = 0;
@@ -549,20 +518,16 @@ namespace Backprop
             return sum / x.Length;
         }
 
-        /// <summary>Writes all weights and biases using the engine's own saveWeights().</summary>
         public void SaveWeights(string path)
         {
             net.saveWeights(path);
         }
 
-        /// <summary>Builds a fresh NeuralNet of the same shape and loads weights with the engine's loadWeights().</summary>
         public void LoadWeights(string path)
         {
             net = new NeuralNet(featureCount, hiddenNodes, 1);
             net.loadWeights(path);
         }
-
-        /// <summary>Predict one raw (unscaled) feature row; returns the value in original target units.</summary>
         public double Predict(double[] rawFeatures)
         {
             for (int f = 0; f < rawFeatures.Length; f++)
@@ -578,8 +543,6 @@ namespace Backprop
             return result;
         }
     }
-
-    /// <summary>Standard regression metrics, computed in the original target units.</summary>
     public class RegressionMetrics
     {
         public int Count;
@@ -618,16 +581,9 @@ namespace Backprop
     public class TuningResult
     {
         public TrainingConfig Config;
-        public double CvRmse;   // leave-one-out RMSE (original units), pooled over seeds
+        public double CvRmse;   // leave-one-out RMSE
         public double CvMae;
     }
-
-    /// <summary>
-    /// Grid search over hidden size and epochs (the engine's learning rates are compile-time constants and cannot be varied). With only a handful of
-    /// rows a single validation split would be extremely noisy, so every candidate is
-    /// scored by leave-one-out cross-validation on the TRAINING rows (the test rows are
-    /// never touched) and averaged over several random initialisations (3 repeats).
-    /// </summary>
     public static class HyperparameterTuner
     {
         public static readonly int[] HiddenSizes = { 2, 4, 8, 16 };
@@ -670,12 +626,6 @@ namespace Backprop
             return results;
         }
     }
-
-    /// <summary>
-    /// Part II demonstration: one complete back-propagation step performed by hand with the
-    /// engine's own neuron classes (INeuron, HNeuron, ONeuron), following the activity-sheet steps,
-    /// then checked against NeuralNet.learn() starting from identical weights.
-    /// </summary>
     public static class EngineWalkthrough
     {
         // mirror of the engine's private constants LRPOUT / LRPIN
@@ -690,9 +640,9 @@ namespace Backprop
             const double hiddenBias = 0.679;
             const int nIn = 5, nOut = 4;
 
-            NeuralNet engine = new NeuralNet(nIn, 1, nOut);   // reference network (also supplies sigmoid())
+            NeuralNet engine = new NeuralNet(nIn, 1, nOut);  
 
-            // ---- build the layers from the engine's neuron classes
+            // build the layers from the engine's neuron classes
             INeuron[] inputLayer = new INeuron[nIn];
             for (int i = 0; i < nIn; i++)
             {
@@ -706,7 +656,7 @@ namespace Backprop
             ONeuron[] outputLayer = new ONeuron[nOut];
             for (int k = 0; k < nOut; k++) outputLayer[k] = new ONeuron(k);
 
-            // ---- Step 1: forward pass
+            // Step 1: forward pass
             double sum = hidden.getBias();
             for (int i = 0; i < nIn; i++) sum += inputLayer[i].getInput() * inputLayer[i].getWeight(0);
             hidden.setHactivation(engine.sigmoid(sum));
@@ -718,7 +668,7 @@ namespace Backprop
             }
             Console.WriteLine("  Step 1  Hidden activation HA = {0:F4}", hidden.getHactivation());
 
-            // ---- Steps 2-3: error component and derivative at each output neuron
+            // Steps 2-3: error component and derivative at each output neuron
             double[] ec = new double[nOut], der = new double[nOut];
             for (int k = 0; k < nOut; k++)
             {
@@ -727,11 +677,11 @@ namespace Backprop
                 Console.WriteLine("  Step 2-3  Output {0}: actual {1:F4}  target {2:F2}  EC {3,8:F4}  DER {4,8:F4}", k + 1, actual[k], targets[k], ec[k], der[k]);
             }
 
-            // ---- Step 4: hidden error (uses the OLD hidden->output weights)
+            // Step 4: hidden error
             hidden.calculateErr(der);
             Console.WriteLine("  Step 4  Hidden error ERR = {0:F6}", hidden.getErr());
 
-            // ---- Step 5: weight updates and biases
+            // Step 5: weight updates and biases
             hidden.setWeight(LrOutput, der);
             for (int i = 0; i < nIn; i++) inputLayer[i].setWeight(0, hidden.getErr(), LrInput);
             for (int k = 0; k < nOut; k++) outputLayer[k].changeBias(LrOutput, der);
@@ -744,7 +694,6 @@ namespace Backprop
             Console.WriteLine();
             Console.WriteLine("          New hidden bias = {0:F4}  (bias += rate * ERR, as in the engine)", hidden.getBias());
 
-            // ---- compare with NeuralNet.learn() from the same starting weights
             string file = Path.GetTempFileName();
             try
             {
@@ -778,16 +727,8 @@ namespace Backprop
             finally { File.Delete(file); }
         }
     }
-
-    /// <summary>
-    /// Verifies the back-propagation maths of the UNMODIFIED engine. The engine exposes no
-    /// weight accessors on NeuralNet, so weights are read/written through its own
-    /// saveWeights()/loadWeights() file format. The analytic gradient implied by one learn()
-    /// step is compared with a central finite-difference gradient of  L = 1/2 SUM_k (t_k - o_k)^2.
-    /// </summary>
     public static class EngineSelfTest
     {
-        // These mirror the private constants LRPIN / LRPOUT in BackNeural.cs.
         private const double LrInput = 0.15, LrOutput = 0.2;
 
         public static bool Run()
@@ -804,7 +745,6 @@ namespace Backprop
             finally { File.Delete(file); }
         }
 
-        // file layout written by saveWeights: input->hidden [i][h], hidden->output [h][o], hidden biases, output biases
         private static double[] ReadParams(NeuralNet net, string file)
         {
             net.saveWeights(file);
@@ -822,7 +762,6 @@ namespace Backprop
             net.loadWeights(file);
         }
 
-        /// <summary>Activity-sheet inputs (5 inputs, 1 hidden neuron, 4 outputs): engine output vs. hand formula.</summary>
         private static bool CheckForwardPass(string file)
         {
             double[] inputs = { 1.1, 2.4, 3.2, 5.1, 3.9 };
