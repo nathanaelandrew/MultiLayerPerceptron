@@ -52,7 +52,15 @@ namespace Backprop
             Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
             string path = args.Length > 0 ? args[0] : FindDataset();
 
-            Banner("1. Engine verification (gradient check of the unmodified engine)");
+            Banner("Part II - chosen track: REGRESSION (custom Backprop engine only)");
+            Console.WriteLine("  Learning is done ONLY by the provided classes: NeuralNet, INeuron (input), HNeuron (hidden), ONeuron (output).");
+            Console.WriteLine("  Program.cs adds data loading, scaling, splitting, tuning and evaluation around them.");
+            Console.WriteLine();
+
+            Banner("1a. Engine walkthrough with INeuron / HNeuron / ONeuron (one backprop step, activity-sheet inputs)");
+            if (!EngineWalkthrough.Run()) return 1;
+
+            Banner("1b. Engine verification (gradient check of the unmodified engine)");
             if (!EngineSelfTest.Run()) return 1;
 
             Banner("2. Data loading & description");
@@ -79,6 +87,8 @@ namespace Backprop
 
             Banner("5. Final training log (best configuration)");
             Console.WriteLine("  Config: {0}", best);
+            Console.WriteLine("  Network: {0} INeuron -> {1} HNeuron -> 1 ONeuron (sigmoid); engine learning rates: output 0.2, input 0.15",
+                data.FeatureCount, best.HiddenNodes);
             best.LogInterval = Math.Max(1, best.Epochs / FinalLogLines);
             RegressionModel model = new RegressionModel();
             model.Fit(data, train, best);
@@ -100,6 +110,18 @@ namespace Backprop
             Console.WriteLine();
             PrintPredictions("Test set predictions", data, test, testPred);
             PrintPredictions("Training set predictions", data, train, trainPred);
+
+            Banner("6b. Save and reload trained weights (NeuralNet.saveWeights / loadWeights)");
+            string weightFile = Path.Combine(Path.GetTempPath(), "mlp_weights.txt");
+            model.SaveWeights(weightFile);
+            model.LoadWeights(weightFile);
+            double[] reloadedPred = model.Predict(data, test);
+            double maxDiff = 0;
+            for (int i = 0; i < reloadedPred.Length; i++) maxDiff = Math.Max(maxDiff, Math.Abs(reloadedPred[i] - testPred[i]));
+            File.Delete(weightFile);
+            Console.WriteLine("  Weights written to a file and loaded into a fresh NeuralNet: max prediction difference = {0:E1} ({1})",
+                maxDiff, maxDiff < 1e-9 ? "identical" : "MISMATCH");
+            Console.WriteLine();
 
             Banner("7. Leave-one-out cross-validation on ALL rows (more reliable for tiny data)");
             double[] looActual = new double[data.Count], looPred = new double[data.Count];
@@ -442,6 +464,7 @@ namespace Backprop
         private MinMaxScaler featureScaler = new MinMaxScaler(FeatureLow, FeatureHigh);
         private MinMaxScaler targetScaler = new MinMaxScaler(TargetLow, TargetHigh);
         private NeuralNet net;
+        private int featureCount, hiddenNodes;
 
         public void Fit(Dataset data, int[] trainIndices, TrainingConfig cfg)
         {
@@ -463,7 +486,9 @@ namespace Backprop
             // 2. build the network
             // NOTE: the engine draws its initial weights from its own unseeded Random,
             // so every new network starts from different random weights.
-            net = new NeuralNet(data.FeatureCount, cfg.HiddenNodes, 1);
+            featureCount = data.FeatureCount;
+            hiddenNodes = cfg.HiddenNodes;
+            net = new NeuralNet(featureCount, hiddenNodes, 1);
 
             // 3. training loop
             Random rng = new Random(cfg.Seed);
@@ -522,6 +547,19 @@ namespace Backprop
                 sum += e * e;
             }
             return sum / x.Length;
+        }
+
+        /// <summary>Writes all weights and biases using the engine's own saveWeights().</summary>
+        public void SaveWeights(string path)
+        {
+            net.saveWeights(path);
+        }
+
+        /// <summary>Builds a fresh NeuralNet of the same shape and loads weights with the engine's loadWeights().</summary>
+        public void LoadWeights(string path)
+        {
+            net = new NeuralNet(featureCount, hiddenNodes, 1);
+            net.loadWeights(path);
         }
 
         /// <summary>Predict one raw (unscaled) feature row; returns the value in original target units.</summary>
@@ -630,6 +668,114 @@ namespace Backprop
                 }
             results.Sort(delegate (TuningResult a, TuningResult b) { return a.CvRmse.CompareTo(b.CvRmse); });
             return results;
+        }
+    }
+
+    /// <summary>
+    /// Part II demonstration: one complete back-propagation step performed by hand with the
+    /// engine's own neuron classes (INeuron, HNeuron, ONeuron), following the activity-sheet steps,
+    /// then checked against NeuralNet.learn() starting from identical weights.
+    /// </summary>
+    public static class EngineWalkthrough
+    {
+        // mirror of the engine's private constants LRPOUT / LRPIN
+        private const double LrOutput = 0.2, LrInput = 0.15;
+
+        public static bool Run()
+        {
+            double[] inputs = { 1.1, 2.4, 3.2, 5.1, 3.9 };
+            double[] weightsIn = { -0.33, 0.07, -0.45, 0.13, 0.37 };
+            double[] weightsOut = { 0.85, 0.62, -0.10, 0.21 };
+            double[] targets = { 0.52, 0.25, 0.75, 0.97 };
+            const double hiddenBias = 0.679;
+            const int nIn = 5, nOut = 4;
+
+            NeuralNet engine = new NeuralNet(nIn, 1, nOut);   // reference network (also supplies sigmoid())
+
+            // ---- build the layers from the engine's neuron classes
+            INeuron[] inputLayer = new INeuron[nIn];
+            for (int i = 0; i < nIn; i++)
+            {
+                inputLayer[i] = new INeuron(i, 1);
+                inputLayer[i].setInput(inputs[i]);
+                inputLayer[i].setWeight(0, weightsIn[i]);
+            }
+            HNeuron hidden = new HNeuron(0, nOut);
+            for (int k = 0; k < nOut; k++) hidden.setWeight(k, weightsOut[k]);
+            hidden.setBias(hiddenBias);
+            ONeuron[] outputLayer = new ONeuron[nOut];
+            for (int k = 0; k < nOut; k++) outputLayer[k] = new ONeuron(k);
+
+            // ---- Step 1: forward pass
+            double sum = hidden.getBias();
+            for (int i = 0; i < nIn; i++) sum += inputLayer[i].getInput() * inputLayer[i].getWeight(0);
+            hidden.setHactivation(engine.sigmoid(sum));
+            double[] actual = new double[nOut];
+            for (int k = 0; k < nOut; k++)
+            {
+                outputLayer[k].setOActivation(engine.sigmoid(hidden.getHactivation() * hidden.getWeight(k) + outputLayer[k].getBias()));
+                actual[k] = outputLayer[k].getOActivation();
+            }
+            Console.WriteLine("  Step 1  Hidden activation HA = {0:F4}", hidden.getHactivation());
+
+            // ---- Steps 2-3: error component and derivative at each output neuron
+            double[] ec = new double[nOut], der = new double[nOut];
+            for (int k = 0; k < nOut; k++)
+            {
+                ec[k] = targets[k] - actual[k];
+                der[k] = actual[k] * (1 - actual[k]) * ec[k];
+                Console.WriteLine("  Step 2-3  Output {0}: actual {1:F4}  target {2:F2}  EC {3,8:F4}  DER {4,8:F4}", k + 1, actual[k], targets[k], ec[k], der[k]);
+            }
+
+            // ---- Step 4: hidden error (uses the OLD hidden->output weights)
+            hidden.calculateErr(der);
+            Console.WriteLine("  Step 4  Hidden error ERR = {0:F6}", hidden.getErr());
+
+            // ---- Step 5: weight updates and biases
+            hidden.setWeight(LrOutput, der);
+            for (int i = 0; i < nIn; i++) inputLayer[i].setWeight(0, hidden.getErr(), LrInput);
+            for (int k = 0; k < nOut; k++) outputLayer[k].changeBias(LrOutput, der);
+            hidden.changeBias(LrInput);
+            Console.Write("  Step 5  New hidden->output weights:");
+            for (int k = 0; k < nOut; k++) Console.Write(" {0:F4}", hidden.getWeight(k));
+            Console.WriteLine();
+            Console.Write("          New input->hidden weights :");
+            for (int i = 0; i < nIn; i++) Console.Write(" {0:F4}", inputLayer[i].getWeight(0));
+            Console.WriteLine();
+            Console.WriteLine("          New hidden bias = {0:F4}  (bias += rate * ERR, as in the engine)", hidden.getBias());
+
+            // ---- compare with NeuralNet.learn() from the same starting weights
+            string file = Path.GetTempFileName();
+            try
+            {
+                List<string> start = new List<string>();
+                foreach (double w in weightsIn) start.Add(w.ToString("R", CultureInfo.InvariantCulture));
+                foreach (double w in weightsOut) start.Add(w.ToString("R", CultureInfo.InvariantCulture));
+                start.Add(hiddenBias.ToString("R", CultureInfo.InvariantCulture));
+                for (int k = 0; k < nOut; k++) start.Add((0.01).ToString("R", CultureInfo.InvariantCulture));
+                File.WriteAllLines(file, start.ToArray());
+                engine.loadWeights(file);
+                for (int i = 0; i < nIn; i++) engine.setInputs(i, inputs[i]);
+                for (int k = 0; k < nOut; k++) engine.setDesiredOutput(k, targets[k]);
+                engine.learn();
+                engine.saveWeights(file);
+                string[] lines = File.ReadAllLines(file);
+
+                double[] manual = new double[nIn + nOut + 1 + nOut];
+                for (int i = 0; i < nIn; i++) manual[i] = inputLayer[i].getWeight(0);
+                for (int k = 0; k < nOut; k++) manual[nIn + k] = hidden.getWeight(k);
+                manual[nIn + nOut] = hidden.getBias();
+                for (int k = 0; k < nOut; k++) manual[nIn + nOut + 1 + k] = outputLayer[k].getBias();
+
+                double worst = 0;
+                for (int j = 0; j < manual.Length; j++)
+                    worst = Math.Max(worst, Math.Abs(manual[j] - double.Parse(lines[j], CultureInfo.InvariantCulture)));
+                bool pass = worst < 1e-12;
+                Console.WriteLine("  Check   Step-by-step neuron result vs NeuralNet.learn(): max difference {0:E1} ... {1}", worst, pass ? "ok" : "MISMATCH");
+                Console.WriteLine();
+                return pass;
+            }
+            finally { File.Delete(file); }
         }
     }
 
